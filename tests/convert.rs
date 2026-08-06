@@ -59,3 +59,118 @@ fn sanitize_reserved_digit_start_and_collisions() {
         vec!["label_", "name_", "geometry_", "_2024", "a_b", "a_b_2", "_x"]
     );
 }
+
+use geo::{Geometry, LineString, MultiPoint, MultiPolygon, Point, Polygon};
+use odk_locations::convert::{detect_family, geopoint, geoshape, Family, DEFAULT_MAX_VERTICES};
+
+fn square(x0: f64, y0: f64, size: f64) -> Polygon<f64> {
+    Polygon::new(
+        LineString::from(vec![
+            (x0, y0),
+            (x0 + size, y0),
+            (x0 + size, y0 + size),
+            (x0, y0 + size),
+            (x0, y0),
+        ]),
+        vec![],
+    )
+}
+
+#[test]
+fn geopoint_is_lat_lng_zero_zero() {
+    let g = Geometry::Point(Point::new(3.4, 6.5));
+    assert_eq!(geopoint(&g).unwrap(), "6.5 3.4 0 0");
+}
+
+#[test]
+fn geopoint_multipoint_uses_member_point() {
+    let g = Geometry::MultiPoint(MultiPoint::from(vec![(1.0, 1.0), (3.0, 1.0)]));
+    let s = geopoint(&g).unwrap();
+    let parts: Vec<&str> = s.split(' ').collect();
+    assert_eq!(parts.len(), 4);
+    let lat: f64 = parts[0].parse().unwrap();
+    let lng: f64 = parts[1].parse().unwrap();
+    assert_eq!(lat, 1.0);
+    assert!((1.0..=3.0).contains(&lng));
+}
+
+#[test]
+fn geopoint_polygon_is_inside() {
+    let g = Geometry::Polygon(square(0.0, 0.0, 2.0));
+    let s = geopoint(&g).unwrap();
+    let parts: Vec<&str> = s.split(' ').collect();
+    let lat: f64 = parts[0].parse().unwrap();
+    let lng: f64 = parts[1].parse().unwrap();
+    assert!(lat > 0.0 && lat < 2.0 && lng > 0.0 && lng < 2.0);
+}
+
+#[test]
+fn geoshape_is_closed_exterior_ring_holes_dropped() {
+    let poly = Polygon::new(
+        LineString::from(vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]),
+        vec![LineString::from(vec![
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (2.0, 2.0),
+            (1.0, 2.0),
+            (1.0, 1.0),
+        ])],
+    );
+    let s = geoshape(&Geometry::Polygon(poly), DEFAULT_MAX_VERTICES).unwrap();
+    let parts: Vec<&str> = s.split(';').collect();
+    assert_eq!(parts.first(), parts.last());
+    assert_eq!(parts.len(), 5); // 4 corners + closing duplicate; hole gone
+    assert!(parts.iter().all(|p| p.ends_with(" 0 0")));
+}
+
+#[test]
+fn geoshape_multipolygon_takes_largest_part() {
+    let mp = MultiPolygon::new(vec![square(0.0, 0.0, 1.0), square(10.0, 10.0, 5.0)]);
+    let s = geoshape(&Geometry::MultiPolygon(mp), DEFAULT_MAX_VERTICES).unwrap();
+    let first_lat: f64 = s.split(' ').next().unwrap().parse().unwrap();
+    assert!(first_lat >= 10.0);
+}
+
+#[test]
+fn geoshape_simplifies_under_vertex_cap() {
+    let n = 2000;
+    let ring: Vec<(f64, f64)> = (0..=n)
+        .map(|i| {
+            let t = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+            (t.cos(), t.sin())
+        })
+        .collect();
+    let poly = Polygon::new(LineString::from(ring), vec![]);
+    let s = geoshape(&Geometry::Polygon(poly), DEFAULT_MAX_VERTICES).unwrap();
+    let parts: Vec<&str> = s.split(';').collect();
+    assert!(parts.len() <= DEFAULT_MAX_VERTICES + 1);
+    assert_eq!(parts.first(), parts.last());
+}
+
+#[test]
+fn detect_family_points_polygons_and_mixed() {
+    let pts = vec![
+        Some(Geometry::Point(Point::new(0.0, 0.0))),
+        None,
+        Some(Geometry::MultiPoint(MultiPoint::from(vec![(1.0, 1.0)]))),
+    ];
+    assert_eq!(detect_family(&pts).unwrap(), Family::Point);
+
+    let polys = vec![Some(Geometry::Polygon(square(0.0, 0.0, 1.0)))];
+    assert_eq!(detect_family(&polys).unwrap(), Family::Polygon);
+
+    let mixed = vec![
+        Some(Geometry::Point(Point::new(0.0, 0.0))),
+        Some(Geometry::Polygon(square(0.0, 0.0, 1.0))),
+    ];
+    let err = detect_family(&mixed).unwrap_err();
+    assert!(err.contains("Point") && err.contains("Polygon"));
+
+    let line = vec![Some(Geometry::LineString(LineString::from(vec![
+        (0.0, 0.0),
+        (1.0, 1.0),
+    ])))];
+    let err = detect_family(&line).unwrap_err();
+    assert!(err.contains("LineString"));
+    assert!(err.contains("row"));
+}
