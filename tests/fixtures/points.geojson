@@ -1,0 +1,11 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [3.4, 6.5]},
+     "properties": {"name": "Clinic A", "pop": 1200, "active": true}},
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [3.5, 6.6]},
+     "properties": {"name": "Clinic B", "pop": 800, "active": false}},
+    {"type": "Feature", "geometry": null,
+     "properties": {"name": null, "pop": 5, "active": true}}
+  ]
+}
