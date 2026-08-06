@@ -2,7 +2,11 @@
 //! stringified attribute columns in input order.
 
 use anyhow::{anyhow, bail, Context, Result};
+use arrow::array::{Array, BinaryArray, LargeBinaryArray};
+use arrow::record_batch::RecordBatch;
 use geo::Geometry;
+use geozero::{wkb::Wkb, ToGeo};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -60,7 +64,7 @@ pub fn read_input(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> 
     match ext.as_str() {
         "geojson" | "json" => read_geojson(path),
         "csv" => read_csv(path, lat_col, lng_col),
-        "parquet" => bail!("parquet support not implemented yet"),
+        "parquet" => read_parquet(path, lat_col, lng_col),
         other => bail!("unsupported input extension {other:?} (expected .geojson/.json, .csv, .parquet)"),
     }
 }
@@ -157,4 +161,178 @@ fn read_csv(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Result
         );
     }
     Ok(Dataset { geoms, columns, rows })
+}
+
+fn read_parquet(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Result<Dataset> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+
+    // GeoParquet: file-level KV metadata key "geo" names the geometry column.
+    let geo_meta: Option<serde_json::Value> = builder
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|k| k.key == "geo"))
+        .and_then(|k| k.value.as_ref())
+        .and_then(|v| serde_json::from_str(v).ok());
+    let primary: Option<String> = geo_meta
+        .as_ref()
+        .and_then(|m| m["primary_column"].as_str())
+        .map(str::to_string);
+
+    // CRS: GeoParquet stores PROJJSON per column; absent means OGC:CRS84
+    // (lon/lat, equivalent to 4326 for our purposes). We support EPSG codes
+    // via crs-definitions; anything else is fatal.
+    let epsg: Option<i64> = primary.as_ref().and_then(|p| {
+        let crs = &geo_meta.as_ref()?["columns"][p.as_str()]["crs"];
+        if crs.is_null() {
+            None
+        } else {
+            crs["id"]["code"].as_i64().or(Some(-1)) // -1 = present but not an EPSG id
+        }
+    });
+
+    let batches: Vec<RecordBatch> = builder.build()?.collect::<std::result::Result<_, _>>()?;
+    let schema = batches
+        .first()
+        .map(|b| b.schema())
+        .ok_or_else(|| anyhow!("parquet file has no rows"))?;
+    let all_columns: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+
+    match primary {
+        Some(geom_col) => {
+            let attr_columns: Vec<String> = all_columns
+                .iter()
+                .filter(|c| **c != geom_col)
+                .cloned()
+                .collect();
+            let mut geoms = Vec::new();
+            let mut rows = Vec::new();
+            for batch in &batches {
+                let gi = batch.schema().index_of(&geom_col)?;
+                let col = batch.column(gi);
+                for row in 0..batch.num_rows() {
+                    geoms.push(wkb_at(col.as_ref(), row)?);
+                    rows.push(stringify_row(batch, row, &attr_columns)?);
+                }
+            }
+            match epsg {
+                None | Some(4326) => {}
+                Some(-1) => bail!(
+                    "GeoParquet CRS is not identified by an EPSG code; reproject the file to EPSG:4326 first"
+                ),
+                Some(code) => reproject(&mut geoms, code)?,
+            }
+            Ok(Dataset { geoms, columns: attr_columns, rows })
+        }
+        None => {
+            let (lat_idx, lng_idx) = detect_latlng(&all_columns, lat_col, lng_col)?;
+            let attr_columns: Vec<String> = all_columns
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != lat_idx && *i != lng_idx)
+                .map(|(_, c)| c.clone())
+                .collect();
+            let mut geoms = Vec::new();
+            let mut rows = Vec::new();
+            for batch in &batches {
+                for row in 0..batch.num_rows() {
+                    let lat = float_at(batch, lat_idx, row);
+                    let lng = float_at(batch, lng_idx, row);
+                    geoms.push(match (lat, lng) {
+                        (Some(lat), Some(lng)) => {
+                            Some(Geometry::Point(geo::Point::new(lng, lat)))
+                        }
+                        _ => None,
+                    });
+                    rows.push(stringify_row(batch, row, &attr_columns)?);
+                }
+            }
+            Ok(Dataset { geoms, columns: attr_columns, rows })
+        }
+    }
+}
+
+fn wkb_at(col: &dyn Array, row: usize) -> Result<Option<Geometry<f64>>> {
+    if col.is_null(row) {
+        return Ok(None);
+    }
+    let bytes: Vec<u8> = if let Some(b) = col.as_any().downcast_ref::<BinaryArray>() {
+        b.value(row).to_vec()
+    } else if let Some(b) = col.as_any().downcast_ref::<LargeBinaryArray>() {
+        b.value(row).to_vec()
+    } else {
+        bail!("geometry column is not WKB-encoded binary (found {:?})", col.data_type());
+    };
+    let geom = Wkb(bytes)
+        .to_geo()
+        .map_err(|e| anyhow!("decoding WKB geometry at row {}: {e}", row + 1))?;
+    Ok(Some(geom))
+}
+
+fn float_at(batch: &RecordBatch, col: usize, row: usize) -> Option<f64> {
+    let col = batch.column(col);
+    if col.is_null(row) {
+        return None;
+    }
+    arrow::util::display::array_value_to_string(col, row)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+fn stringify_row(batch: &RecordBatch, row: usize, attr_columns: &[String]) -> Result<Vec<Option<String>>> {
+    attr_columns
+        .iter()
+        .map(|name| {
+            let i = batch.schema().index_of(name)?;
+            let col = batch.column(i);
+            if col.is_null(row) {
+                Ok(None)
+            } else {
+                Ok(Some(arrow::util::display::array_value_to_string(col, row)?))
+            }
+        })
+        .collect()
+}
+
+/// Reproject in place from `code` to EPSG:4326 via proj4rs. Geographic
+/// sources feed radians into proj4rs; geographic outputs come back in
+/// radians and are converted to degrees.
+fn reproject(geoms: &mut [Option<Geometry<f64>>], code: i64) -> Result<()> {
+    use geo::MapCoordsInPlace;
+    use std::cell::Cell;
+    let code_u16: u16 = code
+        .try_into()
+        .map_err(|_| anyhow!("unsupported CRS code {code}; reproject to EPSG:4326 first"))?;
+    let src_def = crs_definitions::from_code(code_u16)
+        .ok_or_else(|| anyhow!("unknown EPSG code {code}; reproject to EPSG:4326 first"))?;
+    let dst_def = crs_definitions::from_code(4326).expect("4326 definition exists");
+    let src = proj4rs::Proj::from_proj_string(src_def.proj4)
+        .map_err(|e| anyhow!("EPSG:{code}: {e}"))?;
+    let dst = proj4rs::Proj::from_proj_string(dst_def.proj4)
+        .map_err(|e| anyhow!("EPSG:4326: {e}"))?;
+    let src_is_geographic = src_def.proj4.contains("+proj=longlat");
+
+    let failed = Cell::new(false);
+    for geom in geoms.iter_mut().flatten() {
+        geom.map_coords_in_place(|c| {
+            let mut pt = if src_is_geographic {
+                (c.x.to_radians(), c.y.to_radians(), 0.0)
+            } else {
+                (c.x, c.y, 0.0)
+            };
+            match proj4rs::transform::transform(&src, &dst, &mut pt) {
+                Ok(()) => geo::Coord { x: pt.0.to_degrees(), y: pt.1.to_degrees() },
+                Err(_) => {
+                    failed.set(true);
+                    c
+                }
+            }
+        });
+    }
+    if failed.get() {
+        bail!("coordinate transform from EPSG:{code} failed for at least one point");
+    }
+    Ok(())
 }

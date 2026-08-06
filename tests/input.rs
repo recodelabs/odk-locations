@@ -60,3 +60,36 @@ fn unknown_extension_fails() {
     let err = read_input(Path::new("data.shp"), None, None).unwrap_err().to_string();
     assert!(err.contains(".shp") || err.to_lowercase().contains("unsupported"), "{err}");
 }
+
+#[test]
+fn plain_parquet_uses_latlng_columns() {
+    let ds = read_input(&fixture("points_plain.parquet"), None, None).unwrap();
+    assert_eq!(ds.columns, vec!["name", "pop"]);
+    assert_eq!(ds.geoms.len(), 2);
+    let p = match &ds.geoms[0] {
+        Some(geo::Geometry::Point(p)) => p,
+        other => panic!("expected point, got {other:?}"),
+    };
+    assert_eq!((p.y(), p.x()), (6.5, 3.4));
+    assert_eq!(ds.rows[0], vec![Some("P1".into()), Some("10".into())]);
+}
+
+#[test]
+fn geoparquet_decodes_wkb_and_nulls() {
+    let ds = read_input(&fixture("points_geo.parquet"), None, None).unwrap();
+    assert_eq!(ds.columns, vec!["name", "pop"]);
+    assert!(matches!(ds.geoms[0], Some(geo::Geometry::Point(_))));
+    assert!(ds.geoms[1].is_none()); // null geometry row
+    assert_eq!(ds.rows[1][0], None); // null attribute -> None
+}
+
+#[test]
+fn geoparquet_3857_is_reprojected_to_4326() {
+    let ds = read_input(&fixture("points_3857.parquet"), None, None).unwrap();
+    let p = match &ds.geoms[0] {
+        Some(geo::Geometry::Point(p)) => p,
+        other => panic!("expected point, got {other:?}"),
+    };
+    assert!((p.x() - 1.0).abs() < 1e-6, "lng {}", p.x());
+    assert!((p.y() - 1.0).abs() < 1e-6, "lat {}", p.y());
+}
