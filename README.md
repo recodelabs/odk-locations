@@ -3,7 +3,7 @@
 Convert GeoJSON / GeoParquet / parquet / CSV point-or-polygon data into an
 ODK entity CSV — `label`, `geometry` (ODK geopoint/geoshape strings), and
 every attribute as an entity property. The output is directly usable by
-ODK Central's bulk entity upload.
+Ona Data or ODK Central's bulk entity upload.
 
 ## Usage
 
