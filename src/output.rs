@@ -20,8 +20,8 @@ pub fn write_entities(
     original_columns: &[String],
     rows: &[Vec<Option<String>>],
 ) -> Result<Summary> {
-    let mut writer = csv::Writer::from_path(path)
-        .with_context(|| format!("writing {}", path.display()))?;
+    let mut writer =
+        csv::Writer::from_path(path).with_context(|| format!("writing {}", path.display()))?;
     let mut header: Vec<&str> = vec!["label", "geometry"];
     header.extend(sanitized_columns.iter().map(String::as_str));
     writer.write_record(&header)?;
@@ -48,5 +48,9 @@ pub fn write_entities(
         .filter(|(o, s)| o != s)
         .map(|(o, s)| (o.clone(), s.clone()))
         .collect();
-    Ok(Summary { written, skipped, renamed })
+    Ok(Summary {
+        written,
+        skipped,
+        renamed,
+    })
 }

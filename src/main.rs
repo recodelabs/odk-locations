@@ -1,8 +1,7 @@
 use anyhow::{bail, Result};
 use clap::Parser;
 use odk_locations::convert::{
-    detect_family, geopoint, geoshape, make_labels, sanitize_columns, Family,
-    DEFAULT_MAX_VERTICES,
+    detect_family, geopoint, geoshape, make_labels, sanitize_columns, Family, DEFAULT_MAX_VERTICES,
 };
 use odk_locations::input::read_input;
 use odk_locations::output::write_entities;
@@ -59,23 +58,21 @@ fn run() -> Result<()> {
     let family = detect_family(&dataset.geoms).map_err(anyhow::Error::msg)?;
 
     // Label column: explicit flag (must exist), else first name-like column.
-    let label_idx: Option<usize> = match &cli.label_column {
-        Some(name) => Some(
-            dataset
-                .columns
-                .iter()
-                .position(|c| c == name)
-                .ok_or_else(|| {
+    let label_idx: Option<usize> =
+        match &cli.label_column {
+            Some(name) => Some(dataset.columns.iter().position(|c| c == name).ok_or_else(
+                || {
                     anyhow::anyhow!(
                         "label column {name:?} not found (columns: {:?})",
                         dataset.columns
                     )
-                })?,
-        ),
-        None => dataset.columns.iter().position(|c| {
-            NAME_LIKE.contains(&c.to_ascii_lowercase().as_str())
-        }),
-    };
+                },
+            )?),
+            None => dataset
+                .columns
+                .iter()
+                .position(|c| NAME_LIKE.contains(&c.to_ascii_lowercase().as_str())),
+        };
     let label_values: Option<Vec<Option<String>>> =
         label_idx.map(|i| dataset.rows.iter().map(|r| r[i].clone()).collect());
     let labels = make_labels(label_values.as_deref(), dataset.geoms.len());
@@ -110,10 +107,11 @@ fn run() -> Result<()> {
         .geoms
         .iter()
         .map(|g| {
-            g.as_ref().and_then(|g| match (family, cli.geometry.as_str()) {
-                (Family::Polygon, "boundary") => geoshape(g, cli.max_vertices),
-                _ => geopoint(g),
-            })
+            g.as_ref()
+                .and_then(|g| match (family, cli.geometry.as_str()) {
+                    (Family::Polygon, "boundary") => geoshape(g, cli.max_vertices),
+                    _ => geopoint(g),
+                })
         })
         .collect();
 
@@ -122,7 +120,11 @@ fn run() -> Result<()> {
     }
 
     let output = cli.output.clone().unwrap_or_else(|| {
-        let stem = cli.input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        let stem = cli
+            .input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
         cli.input.with_file_name(format!("{stem}-entities.csv"))
     });
     let summary = write_entities(

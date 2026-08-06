@@ -2,7 +2,9 @@ use odk_locations::input::{detect_latlng, read_input, Dataset};
 use std::path::Path;
 
 fn fixture(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 #[test]
@@ -12,7 +14,14 @@ fn geojson_points_columns_rows_and_nulls() {
     assert_eq!(ds.geoms.len(), 3);
     assert!(ds.geoms[0].is_some());
     assert!(ds.geoms[2].is_none());
-    assert_eq!(ds.rows[0], vec![Some("Clinic A".into()), Some("1200".into()), Some("true".into())]);
+    assert_eq!(
+        ds.rows[0],
+        vec![
+            Some("Clinic A".into()),
+            Some("1200".into()),
+            Some("true".into())
+        ]
+    );
     assert_eq!(ds.rows[2][0], None); // null property -> None
 }
 
@@ -51,14 +60,21 @@ fn detect_latlng_errors_when_missing() {
     let cols: Vec<String> = vec!["a".into(), "b".into()];
     let err = detect_latlng(&cols, None, None).unwrap_err().to_string();
     assert!(err.contains("lat"), "{err}");
-    let err = detect_latlng(&cols, Some("nope"), Some("b")).unwrap_err().to_string();
+    let err = detect_latlng(&cols, Some("nope"), Some("b"))
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("nope"), "{err}");
 }
 
 #[test]
 fn unknown_extension_fails() {
-    let err = read_input(Path::new("data.shp"), None, None).unwrap_err().to_string();
-    assert!(err.contains(".shp") || err.to_lowercase().contains("unsupported"), "{err}");
+    let err = read_input(Path::new("data.shp"), None, None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(".shp") || err.to_lowercase().contains("unsupported"),
+        "{err}"
+    );
 }
 
 #[test]

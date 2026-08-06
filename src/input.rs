@@ -65,7 +65,9 @@ pub fn read_input(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> 
         "geojson" | "json" => read_geojson(path),
         "csv" => read_csv(path, lat_col, lng_col),
         "parquet" => read_parquet(path, lat_col, lng_col),
-        other => bail!("unsupported input extension {other:?} (expected .geojson/.json, .csv, .parquet)"),
+        other => {
+            bail!("unsupported input extension {other:?} (expected .geojson/.json, .csv, .parquet)")
+        }
     }
 }
 
@@ -78,8 +80,8 @@ fn json_value_to_string(v: &serde_json::Value) -> Option<String> {
 }
 
 fn read_geojson(path: &Path) -> Result<Dataset> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let gj: geojson::GeoJson = text
         .parse()
         .with_context(|| format!("parsing {} as GeoJSON", path.display()))?;
@@ -120,12 +122,16 @@ fn read_geojson(path: &Path) -> Result<Dataset> {
                 .collect(),
         );
     }
-    Ok(Dataset { geoms, columns, rows })
+    Ok(Dataset {
+        geoms,
+        columns,
+        rows,
+    })
 }
 
 fn read_csv(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Result<Dataset> {
-    let mut reader = csv::Reader::from_path(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let mut reader =
+        csv::Reader::from_path(path).with_context(|| format!("reading {}", path.display()))?;
     let headers: Vec<String> = reader.headers()?.iter().map(|h| h.to_string()).collect();
     let (lat_idx, lng_idx) = detect_latlng(&headers, lat_col, lng_col)?;
 
@@ -151,21 +157,19 @@ fn read_csv(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Result
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| *i != lat_idx && *i != lng_idx)
-                .map(|(i, _)| {
-                    record
-                        .get(i)
-                        .map(str::to_string)
-                        .filter(|s| !s.is_empty())
-                })
+                .map(|(i, _)| record.get(i).map(str::to_string).filter(|s| !s.is_empty()))
                 .collect(),
         );
     }
-    Ok(Dataset { geoms, columns, rows })
+    Ok(Dataset {
+        geoms,
+        columns,
+        rows,
+    })
 }
 
 fn read_parquet(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Result<Dataset> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
 
     // GeoParquet: file-level KV metadata key "geo" names the geometry column.
@@ -224,7 +228,11 @@ fn read_parquet(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Re
                 ),
                 Some(code) => reproject(&mut geoms, code)?,
             }
-            Ok(Dataset { geoms, columns: attr_columns, rows })
+            Ok(Dataset {
+                geoms,
+                columns: attr_columns,
+                rows,
+            })
         }
         None => {
             let (lat_idx, lng_idx) = detect_latlng(&all_columns, lat_col, lng_col)?;
@@ -241,15 +249,17 @@ fn read_parquet(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Re
                     let lat = float_at(batch, lat_idx, row);
                     let lng = float_at(batch, lng_idx, row);
                     geoms.push(match (lat, lng) {
-                        (Some(lat), Some(lng)) => {
-                            Some(Geometry::Point(geo::Point::new(lng, lat)))
-                        }
+                        (Some(lat), Some(lng)) => Some(Geometry::Point(geo::Point::new(lng, lat))),
                         _ => None,
                     });
                     rows.push(stringify_row(batch, row, &attr_columns)?);
                 }
             }
-            Ok(Dataset { geoms, columns: attr_columns, rows })
+            Ok(Dataset {
+                geoms,
+                columns: attr_columns,
+                rows,
+            })
         }
     }
 }
@@ -263,7 +273,10 @@ fn wkb_at(col: &dyn Array, row: usize) -> Result<Option<Geometry<f64>>> {
     } else if let Some(b) = col.as_any().downcast_ref::<LargeBinaryArray>() {
         b.value(row).to_vec()
     } else {
-        bail!("geometry column is not WKB-encoded binary (found {:?})", col.data_type());
+        bail!(
+            "geometry column is not WKB-encoded binary (found {:?})",
+            col.data_type()
+        );
     };
     let geom = Wkb(bytes)
         .to_geo()
@@ -281,7 +294,11 @@ fn float_at(batch: &RecordBatch, col: usize, row: usize) -> Option<f64> {
         .and_then(|s| s.trim().parse().ok())
 }
 
-fn stringify_row(batch: &RecordBatch, row: usize, attr_columns: &[String]) -> Result<Vec<Option<String>>> {
+fn stringify_row(
+    batch: &RecordBatch,
+    row: usize,
+    attr_columns: &[String],
+) -> Result<Vec<Option<String>>> {
     attr_columns
         .iter()
         .map(|name| {
@@ -308,10 +325,10 @@ fn reproject(geoms: &mut [Option<Geometry<f64>>], code: i64) -> Result<()> {
     let src_def = crs_definitions::from_code(code_u16)
         .ok_or_else(|| anyhow!("unknown EPSG code {code}; reproject to EPSG:4326 first"))?;
     let dst_def = crs_definitions::from_code(4326).expect("4326 definition exists");
-    let src = proj4rs::Proj::from_proj_string(src_def.proj4)
-        .map_err(|e| anyhow!("EPSG:{code}: {e}"))?;
-    let dst = proj4rs::Proj::from_proj_string(dst_def.proj4)
-        .map_err(|e| anyhow!("EPSG:4326: {e}"))?;
+    let src =
+        proj4rs::Proj::from_proj_string(src_def.proj4).map_err(|e| anyhow!("EPSG:{code}: {e}"))?;
+    let dst =
+        proj4rs::Proj::from_proj_string(dst_def.proj4).map_err(|e| anyhow!("EPSG:4326: {e}"))?;
     let src_is_geographic = src_def.proj4.contains("+proj=longlat");
 
     let failed = Cell::new(false);
@@ -323,7 +340,10 @@ fn reproject(geoms: &mut [Option<Geometry<f64>>], code: i64) -> Result<()> {
                 (c.x, c.y, 0.0)
             };
             match proj4rs::transform::transform(&src, &dst, &mut pt) {
-                Ok(()) => geo::Coord { x: pt.0.to_degrees(), y: pt.1.to_degrees() },
+                Ok(()) => geo::Coord {
+                    x: pt.0.to_degrees(),
+                    y: pt.1.to_degrees(),
+                },
                 Err(_) => {
                     failed.set(true);
                     c

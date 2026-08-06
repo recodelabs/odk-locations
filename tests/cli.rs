@@ -3,7 +3,9 @@ use predicates::prelude::*;
 use std::path::Path;
 
 fn fixture(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 #[test]
@@ -50,7 +52,10 @@ fn polygon_boundary_default_and_centroid_flag() {
         .assert()
         .success();
     let text = std::fs::read_to_string(&out).unwrap();
-    assert!(text.contains(";"), "boundary default should emit geoshape rings");
+    assert!(
+        text.contains(";"),
+        "boundary default should emit geoshape rings"
+    );
 
     Command::cargo_bin("odk-locations")
         .unwrap()
@@ -62,7 +67,10 @@ fn polygon_boundary_default_and_centroid_flag() {
         .assert()
         .success();
     let text = std::fs::read_to_string(&out).unwrap();
-    assert!(!text.contains(";"), "centroid mode must emit geopoints only");
+    assert!(
+        !text.contains(";"),
+        "centroid mode must emit geopoints only"
+    );
 }
 
 #[test]
@@ -164,7 +172,8 @@ fn all_geometries_convert_to_none_is_fatal() {
 }
 
 fn tempdir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("odk-locations-test-{}", std::process::id()))
+    let dir = std::env::temp_dir()
+        .join(format!("odk-locations-test-{}", std::process::id()))
         .join(format!("{:x}", rand_suffix()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -180,7 +189,10 @@ fn rand_suffix() -> u128 {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     (nanos << 32) ^ (n as u128)
 }

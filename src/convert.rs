@@ -1,8 +1,8 @@
 //! Pure conversion logic: ODK geometry strings, entity labels, and
 //! property-name sanitization. Semantics ported from Pixel PR #185.
 
-use std::collections::{HashMap, HashSet};
 use geo::{Area, Geometry, InteriorPoint, Polygon, Simplify};
+use std::collections::{HashMap, HashSet};
 
 /// Per-row entity labels: the label column's trimmed value, else
 /// "feature-<n>" (1-based). Duplicates get " (2)", " (3)"… in row order.
@@ -168,15 +168,15 @@ pub fn geopoint(geom: &Geometry<f64>) -> Option<String> {
 fn largest_part(geom: &Geometry<f64>) -> Option<Polygon<f64>> {
     match geom {
         Geometry::Polygon(p) => Some(p.clone()),
-        Geometry::MultiPolygon(mp) => mp
-            .0
-            .iter()
-            .max_by(|a, b| {
-                a.unsigned_area()
-                    .partial_cmp(&b.unsigned_area())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .cloned(),
+        Geometry::MultiPolygon(mp) => {
+            mp.0.iter()
+                .max_by(|a, b| {
+                    a.unsigned_area()
+                        .partial_cmp(&b.unsigned_area())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .cloned()
+        }
         _ => None,
     }
 }
@@ -202,6 +202,9 @@ pub fn geoshape(geom: &Geometry<f64>, max_vertices: usize) -> Option<String> {
         tolerance *= 4.0;
     }
     let ring = &poly.exterior().0;
-    let parts: Vec<String> = ring.iter().map(|c| format!("{} {} 0 0", c.y, c.x)).collect();
+    let parts: Vec<String> = ring
+        .iter()
+        .map(|c| format!("{} {} 0 0", c.y, c.x))
+        .collect();
     Some(parts.join(";"))
 }
