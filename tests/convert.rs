@@ -74,6 +74,24 @@ fn sanitize_reserved_digit_start_and_collisions() {
     );
 }
 
+#[test]
+fn sanitize_collision_suffix_never_starts_with_double_underscore() {
+    // Review finding: "#" and "%" both sanitize to "_"; the naive suffix
+    // loop would emit "__2", which starts with the reserved "__" prefix
+    // ODK Central rejects. The re-collapsed suffix must land on "_2".
+    let cols: Vec<String> = ["#", "%"].iter().map(|c| c.to_string()).collect();
+    let out = sanitize_columns(&cols);
+    assert_eq!(out, vec!["_", "_2"]);
+    let set: std::collections::HashSet<_> = out.iter().collect();
+    assert_eq!(set.len(), 2, "outputs must be unique");
+    for name in &out {
+        assert!(
+            !name.starts_with("__"),
+            "{name:?} starts with reserved __ prefix"
+        );
+    }
+}
+
 use geo::{Geometry, LineString, MultiPoint, MultiPolygon, Point, Polygon};
 use odk_locations::convert::{detect_family, geopoint, geoshape, Family, DEFAULT_MAX_VERTICES};
 

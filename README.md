@@ -28,8 +28,11 @@ Examples:
 - Labels are deterministic: label-column value, else `feature-<n>`;
   duplicates get ` (2)`, ` (3)`….
 - Property names are sanitized to ODK rules; renames are reported on stderr.
-- CRS: 4326 assumed when undeclared; GeoParquet with an EPSG-coded CRS is
-  reprojected (pure Rust); anything else must be reprojected upstream.
+- CRS: 4326 assumed when undeclared; OGC:CRS84 (the GeoParquet spec default,
+  and what ogr2ogr/geopandas write when no target SRS is given) is treated as
+  4326-equivalent with no reprojection. GeoParquet with an EPSG-coded CRS
+  (numeric or string) is reprojected (pure Rust); anything else must be
+  reprojected upstream.
 - Line/mixed-geometry inputs are rejected.
 
 ## Build

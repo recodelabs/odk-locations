@@ -25,4 +25,15 @@ gdf3857 = gpd.GeoDataFrame(
     crs="EPSG:3857",
 )
 gdf3857.to_parquet(f"{FIX}/points_3857.parquet", index=False)
+
+# OGC:CRS84 is the GeoParquet spec's default CRS and what ogr2ogr writes when
+# no target SRS is given. geopandas/pyproj serialize its PROJJSON id as
+# {"authority": "OGC", "code": "CRS84"} (a JSON string code, not numeric) —
+# it must be accepted as 4326-equivalent with no reprojection.
+gdf_crs84 = gpd.GeoDataFrame(
+    {"name": ["C1"]},
+    geometry=[Point(3.4, 6.5)],
+    crs="OGC:CRS84",
+)
+gdf_crs84.to_parquet(f"{FIX}/points_crs84.parquet", index=False)
 print("fixtures written")

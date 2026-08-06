@@ -77,7 +77,13 @@ pub fn sanitize_columns(cols: &[String]) -> Vec<String> {
         if !taken.insert(s.clone()) {
             let mut n = 2;
             s = loop {
-                let candidate = format!("{s}_{n}");
+                // Re-collapse: a base of "_" plus a "_<n>" suffix produces
+                // "__<n>", which starts with the reserved "__" prefix ODK
+                // Central rejects (e.g. "#" and "%" both sanitize to "_").
+                let mut candidate = format!("{s}_{n}");
+                while candidate.starts_with("__") {
+                    candidate.remove(0);
+                }
                 if taken.insert(candidate.clone()) {
                     break candidate;
                 }

@@ -187,15 +187,22 @@ fn read_parquet(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Re
 
     // CRS: GeoParquet stores PROJJSON per column; absent means OGC:CRS84
     // (lon/lat, equivalent to 4326 for our purposes). We support EPSG codes
-    // via crs-definitions; anything else is fatal.
-    let epsg: Option<i64> = primary.as_ref().and_then(|p| {
-        let crs = &geo_meta.as_ref()?["columns"][p.as_str()]["crs"];
-        if crs.is_null() {
-            None
-        } else {
-            crs["id"]["code"].as_i64().or(Some(-1)) // -1 = present but not an EPSG id
+    // (numeric or string) and the OGC:CRS84 PROJJSON id via crs-definitions;
+    // anything else is fatal.
+    let crs_decision: CrsDecision = match &primary {
+        None => CrsDecision::Accept4326,
+        Some(p) => {
+            let crs = &geo_meta
+                .as_ref()
+                .expect("primary_column implies geo metadata is present")["columns"][p.as_str()]
+                ["crs"];
+            if crs.is_null() {
+                CrsDecision::Accept4326
+            } else {
+                epsg_from_crs(crs)
+            }
         }
-    });
+    };
 
     let batches: Vec<RecordBatch> = builder.build()?.collect::<std::result::Result<_, _>>()?;
     let schema = batches
@@ -221,12 +228,12 @@ fn read_parquet(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Re
                     rows.push(stringify_row(batch, row, &attr_columns)?);
                 }
             }
-            match epsg {
-                None | Some(4326) => {}
-                Some(-1) => bail!(
+            match crs_decision {
+                CrsDecision::Accept4326 => {}
+                CrsDecision::Unsupported => bail!(
                     "GeoParquet CRS is not identified by an EPSG code; reproject the file to EPSG:4326 first"
                 ),
-                Some(code) => reproject(&mut geoms, code)?,
+                CrsDecision::Reproject(code) => reproject(&mut geoms, code)?,
             }
             Ok(Dataset {
                 geoms,
@@ -261,6 +268,45 @@ fn read_parquet(path: &Path, lat_col: Option<&str>, lng_col: Option<&str>) -> Re
                 rows,
             })
         }
+    }
+}
+
+/// What a GeoParquet column's PROJJSON `crs` value means for us.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrsDecision {
+    /// EPSG:4326, or the GeoParquet-default OGC:CRS84 (lon/lat, equivalent
+    /// to 4326 for our purposes) — no reprojection needed.
+    Accept4326,
+    /// A non-4326 EPSG code we can reproject with crs-definitions/proj4rs.
+    Reproject(i64),
+    /// Present but not an EPSG id or recognized OGC:CRS84 — fatal.
+    Unsupported,
+}
+
+/// Interpret a GeoParquet column's PROJJSON `crs` value (already known to be
+/// non-null). Handles the OGC:CRS84 id (any authority/code casing), numeric
+/// EPSG codes, and EPSG codes serialized as JSON strings.
+fn epsg_from_crs(crs: &serde_json::Value) -> CrsDecision {
+    let id = &crs["id"];
+    if id.is_null() {
+        return CrsDecision::Unsupported;
+    }
+    let authority = id["authority"].as_str().unwrap_or("");
+    let code = &id["code"];
+
+    if authority.eq_ignore_ascii_case("ogc")
+        && code
+            .as_str()
+            .is_some_and(|c| c.eq_ignore_ascii_case("crs84"))
+    {
+        return CrsDecision::Accept4326;
+    }
+
+    let numeric_code = code.as_i64().or_else(|| code.as_str()?.parse::<i64>().ok());
+    match numeric_code {
+        Some(4326) => CrsDecision::Accept4326,
+        Some(n) => CrsDecision::Reproject(n),
+        None => CrsDecision::Unsupported,
     }
 }
 
@@ -355,4 +401,55 @@ fn reproject(geoms: &mut [Option<Geometry<f64>>], code: i64) -> Result<()> {
         bail!("coordinate transform from EPSG:{code} failed for at least one point");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod crs_tests {
+    use super::{epsg_from_crs, CrsDecision};
+    use serde_json::json;
+
+    #[test]
+    fn numeric_4326_is_accepted() {
+        let crs = json!({"id": {"authority": "EPSG", "code": 4326}});
+        assert_eq!(epsg_from_crs(&crs), CrsDecision::Accept4326);
+    }
+
+    #[test]
+    fn numeric_3857_is_reprojected() {
+        let crs = json!({"id": {"authority": "EPSG", "code": 3857}});
+        assert_eq!(epsg_from_crs(&crs), CrsDecision::Reproject(3857));
+    }
+
+    #[test]
+    fn string_epsg_code_is_parsed_like_numeric() {
+        let crs = json!({"id": {"authority": "EPSG", "code": "3857"}});
+        assert_eq!(epsg_from_crs(&crs), CrsDecision::Reproject(3857));
+
+        let crs4326 = json!({"id": {"authority": "EPSG", "code": "4326"}});
+        assert_eq!(epsg_from_crs(&crs4326), CrsDecision::Accept4326);
+    }
+
+    #[test]
+    fn ogc_crs84_is_accepted() {
+        let crs = json!({"id": {"authority": "OGC", "code": "CRS84"}});
+        assert_eq!(epsg_from_crs(&crs), CrsDecision::Accept4326);
+    }
+
+    #[test]
+    fn ogc_crs84_lowercase_variant_is_accepted() {
+        let crs = json!({"id": {"authority": "ogc", "code": "crs84"}});
+        assert_eq!(epsg_from_crs(&crs), CrsDecision::Accept4326);
+    }
+
+    #[test]
+    fn absent_id_is_unsupported() {
+        let crs = json!({"type": "GeographicCRS", "name": "some datum"});
+        assert_eq!(epsg_from_crs(&crs), CrsDecision::Unsupported);
+    }
+
+    #[test]
+    fn garbage_code_is_unsupported() {
+        let crs = json!({"id": {"authority": "ESRI", "code": "not-a-number"}});
+        assert_eq!(epsg_from_crs(&crs), CrsDecision::Unsupported);
+    }
 }

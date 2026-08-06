@@ -109,3 +109,19 @@ fn geoparquet_3857_is_reprojected_to_4326() {
     assert!((p.x() - 1.0).abs() < 1e-6, "lng {}", p.x());
     assert!((p.y() - 1.0).abs() < 1e-6, "lat {}", p.y());
 }
+
+#[test]
+fn geoparquet_ogc_crs84_reads_without_reprojection() {
+    // Review finding #1: OGC:CRS84 is the GeoParquet spec default and what
+    // ogr2ogr/geopandas write when no target SRS is given. Its PROJJSON id
+    // code is the *string* "CRS84", not a numeric EPSG code, so it must not
+    // be rejected as "not an EPSG id" nor run through reprojection.
+    let ds = read_input(&fixture("points_crs84.parquet"), None, None).unwrap();
+    assert_eq!(ds.columns, vec!["name"]);
+    let p = match &ds.geoms[0] {
+        Some(geo::Geometry::Point(p)) => p,
+        other => panic!("expected point, got {other:?}"),
+    };
+    // Unprojected: coordinates match the source lon/lat exactly.
+    assert_eq!((p.y(), p.x()), (6.5, 3.4));
+}
