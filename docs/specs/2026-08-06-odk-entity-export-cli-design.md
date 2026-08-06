@@ -81,11 +81,12 @@ odk-locations INPUT [-o entities.csv]
 - Geometry family decided from the data: all Point/MultiPoint → point;
   all Polygon/MultiPolygon → polygon; anything else fails, naming the
   offending geometry types and up to 5 example row indices.
-- **CRS policy:** no CRS metadata → assume EPSG:4326 with a warning.
-  A declared CRS other than 4326 → transform via `proj4rs` when it's a
-  supported EPSG code (covers 3857 and other common projected CRSs);
-  unsupported/exotic CRS definitions → fatal error telling the user to
-  reproject first.
+- **CRS policy:** GeoJSON is 4326 by RFC 7946, CSV/plain-parquet lat/lng
+  are 4326 by convention, and GeoParquet without a `crs` field defaults to
+  OGC:CRS84 — all treated as 4326 silently. A GeoParquet CRS declared with
+  an EPSG code other than 4326 → transform via `proj4rs` (covers 3857 and
+  other common projected CRSs); a CRS not identified by an EPSG code →
+  fatal error telling the user to reproject first.
 
 ## Conversion rules (semantics identical to Pixel PR #185)
 
@@ -108,7 +109,8 @@ odk-locations INPUT [-o entities.csv]
 ## Output
 
 CSV (UTF-8, header row): `label`, `geometry`, then sanitized attribute
-columns in input order. Attribute names are sanitized to ODK property
+columns in input order. The label column is consumed by `label` and not
+repeated as a property. Attribute names are sanitized to ODK property
 rules: invalid chars → `_`; must not equal `label` or `name` (reserved by
 Central) and must not start with `__`; post-sanitize collisions get `_2`,
 `_3`… suffixes. Attribute values are written as strings; nulls → empty
