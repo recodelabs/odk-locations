@@ -133,6 +133,36 @@ fn all_rows_skipped_is_fatal() {
         .stderr(predicate::str::contains("geometr"));
 }
 
+/// Sibling to `all_rows_skipped_is_fatal`: that test's fixture (a single
+/// null-geometry feature) has *zero* non-null geometries, so it's rejected by
+/// `detect_family` before main.rs's own `bail!("no exportable features...")`
+/// is ever reached — leaving that bail (the code this task actually added)
+/// with no coverage. An empty `MultiPoint` passes `detect_family` (it's a
+/// recognized point-family geometry) but converts to no geopoint string
+/// (`geopoint`'s `interior_point()` returns `None` for it), so every row
+/// still ends up geometry-less at the point main.rs checks
+/// `geometries.iter().all(Option::is_none)`. This exercises main's bail
+/// specifically, pinned to its exact message.
+#[test]
+fn all_geometries_convert_to_none_is_fatal() {
+    let dir = tempdir();
+    let input = dir.join("empty_multipoint.geojson");
+    std::fs::write(
+        &input,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"MultiPoint","coordinates":[]},"properties":{"name":"x"}}]}"#,
+    )
+    .unwrap();
+    Command::cargo_bin("odk-locations")
+        .unwrap()
+        .arg(&input)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "no exportable features: every row has a missing or empty geometry",
+        ));
+}
+
 fn tempdir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("odk-locations-test-{}", std::process::id()))
         .join(format!("{:x}", rand_suffix()));
