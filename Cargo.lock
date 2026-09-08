@@ -1284,7 +1284,9 @@ dependencies = [
  "parquet",
  "predicates",
  "proj4rs",
+ "serde",
  "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

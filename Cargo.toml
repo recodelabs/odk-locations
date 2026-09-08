@@ -6,23 +6,38 @@ edition = "2021"
 [lib]
 name = "odk_locations"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "odk-locations"
 path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# Native CLI: file I/O (GeoJSON/CSV/Parquet), CRS reprojection, arg parsing.
+cli = ["dep:clap", "dep:parquet", "dep:arrow", "dep:proj4rs", "dep:crs-definitions"]
+# Browser build (wasm32-unknown-unknown): just the pure conversion logic in
+# `convert`, wrapped for JS. No file I/O and no CRS reprojection — the caller
+# (DuckDB-WASM, reading our own EPSG:4326 registry) hands rows straight in, so
+# the parquet/arrow/proj4rs dependency chain (and its native zstd-sys build)
+# never enters this target at all.
+wasm = ["dep:wasm-bindgen", "dep:serde"]
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 csv = "1"
 geo = "0.30"
 geojson = "0.24"
 geozero = { version = "0.14", features = ["with-wkb", "with-geo"] }
-parquet = "56"
-arrow = "56"
-proj4rs = "0.1"
-crs-definitions = "0.3"
+parquet = { version = "56", optional = true }
+arrow = { version = "56", optional = true }
+proj4rs = { version = "0.1", optional = true }
+crs-definitions = { version = "0.3", optional = true }
 serde_json = { version = "1", features = ["preserve_order"] }
+serde = { version = "1", features = ["derive"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"
